@@ -67,7 +67,9 @@ UI components render and gather input. Server guards decide access, and server s
 
 ## Requirements
 
-- Node.js 20.19 or newer (Node 20.20.2 is used for the current build environment).
+- Node.js 22 or newer for the application and Capacitor 8 CLI.
+- Android Studio 2025.2.1 or newer with Android SDK Platform 36 and Build Tools 36.1.0.
+- JDK 21 selected as the Gradle runtime. Android Studio 2026.1 may bundle Java 25, which is too new for the generated Gradle 8.14.3 wrapper.
 - npm 10 or newer.
 - Docker Compose for the included local PostgreSQL service, or a PostgreSQL 15+ database you manage.
 
@@ -116,13 +118,97 @@ To use the app without a login during local development, set `LOCAL_PREVIEW="tru
 
 Prisma Client generation runs after `npm install`; regenerate it with `npm run db:generate`. `npm run db:validate` checks the schema without connecting to PostgreSQL. Migration and seed commands require a valid `DATABASE_URL`.
 
+## Android tablet debug app
+
+The Android app is a Capacitor WebView shell around the existing POS. The Next.js server and PostgreSQL stay on the computer; the APK contains neither database credentials nor Auth.js secrets. Keep the computer, database, and POS server running while testing. The tablet and computer must use the same private Wi-Fi network. This debug build uses local HTTP and is for trusted-network testing only.
+
+### Prepare the computer
+
+1. In Windows PowerShell, run `ipconfig` and note the IPv4 address for the active Wi-Fi adapter (for example, `192.168.1.25`). Do not use `localhost` or `127.0.0.1` in the APK.
+2. In `.env`, set `NEXTAUTH_URL` to the computer's LAN origin, such as `http://192.168.1.25:3000`. Keep the existing `NEXTAUTH_SECRET` private, then restart the Next.js server so Auth.js uses the new origin.
+3. Start PostgreSQL and apply any pending migrations. If using the included Docker Compose service, PostgreSQL remains bound to the computer's loopback interface; do not expose port 5432 to the network.
+
+   ```powershell
+   docker compose up -d db
+   npm run db:deploy
+   npm run db:seed
+   ```
+
+4. Start Next.js bound to all computer network interfaces:
+
+   ```powershell
+   npm run dev -- --hostname 0.0.0.0
+   ```
+
+5. If Windows Firewall blocks the tablet, allow TCP port 3000 only on the Private profile. Run PowerShell as Administrator for this temporary rule, then remove it after testing:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "Kopi Sore POS local test" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow -Profile Private
+   ```
+
+   After testing, remove the temporary rule:
+
+   ```powershell
+   Remove-NetFirewallRule -DisplayName "Kopi Sore POS local test"
+   ```
+
+### Build and install the APK
+
+1. Install project dependencies from Windows PowerShell with Node.js 22 or newer:
+
+   ```powershell
+   npm ci
+   ```
+
+2. Set the same LAN origin for Capacitor and sync the Android project. This writes the origin into an ignored generated Android config asset, not into tracked source:
+
+   ```powershell
+   $env:ANDROID_POS_URL = "http://192.168.1.25:3000"
+   npx cap sync android
+   ```
+
+   Replace the example address with the current Wi-Fi IPv4 address. Re-run this sync and rebuild the APK if that address changes.
+
+3. In Android Studio, open the repository's `android` folder. Set **Settings → Build, Execution, Deployment → Build Tools → Gradle → Gradle JDK** to JDK 21. Select the debug build variant, then choose **Build → Build Bundle(s) / APK(s) → Build APK(s)**. The command-line equivalent from PowerShell is:
+
+   ```powershell
+   $env:JAVA_HOME = "C:\path\to\your\jdk-21"
+   $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+   $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+   Set-Location android
+   .\gradlew.bat assembleDebug
+   ```
+
+   Set `JAVA_HOME` to your installed JDK 21 directory. The command-line build must use JDK 21 too; Android Studio's Gradle JDK selection only applies inside the IDE.
+
+   The debug APK is created at `android/app/build/outputs/apk/debug/app-debug.apk`. Only the debug manifest allows HTTP; the main and release manifests keep cleartext traffic disabled. Do not publish or distribute this debug APK.
+
+4. Install by USB with ADB, or copy the APK to the tablet and open it there:
+
+   ```powershell
+   & "$env:ANDROID_HOME\platform-tools\adb.exe" install -r .\app\build\outputs\apk\debug\app-debug.apk
+   ```
+
+5. Open **Kopi Sore POS** and sign in with the local demo OWNER account listed above. Use normal authentication; keep `LOCAL_PREVIEW=false`.
+
+### Troubleshooting
+
+- **The app cannot connect:** confirm both devices are on the same Wi-Fi, the computer server is still running, and the tablet can open `http://<computer-LAN-IP>:3000` in its browser.
+- **The server is not reachable:** restart Next.js with `--hostname 0.0.0.0`; check the Windows Firewall Private-profile rule and router client isolation.
+- **The app opens the wrong computer or a stale address:** update `NEXTAUTH_URL` in `.env`, restart Next.js, set the new `ANDROID_POS_URL`, run `npx cap sync android`, rebuild, and reinstall the APK.
+- **Login does not work:** make sure `NEXTAUTH_URL` and `ANDROID_POS_URL` use exactly the same origin, including `http` and port `3000`, then restart Next.js and rebuild the APK.
+- **The computer/server/database is off:** the tablet app depends on all three being available and does not support offline transactions.
+
+`ANDROID_POS_URL` accepts only an origin-only HTTP(S) URL; localhost, loopback, wildcard hosts, credentials, paths, queries, and fragments are rejected. Capacitor 8 requires Node.js 22 or newer. Keep the APK and test network private because this is a debug-only HTTP setup.
+
 ## Environment variables
 
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string used by Prisma. |
 | `NEXTAUTH_SECRET` | Secret used to sign and encrypt Auth.js session tokens. Use a unique random value outside local development. |
-| `NEXTAUTH_URL` | Canonical application URL used by Auth.js, such as `http://localhost:3000`. |
+| `NEXTAUTH_URL` | Canonical application URL used by Auth.js, such as `http://localhost:3000`; use the computer LAN origin for tablet testing. |
+| `ANDROID_POS_URL` | Optional HTTP(S) origin embedded by Capacitor into the local debug app during `npx cap sync android`. |
 | `POSTGRES_USER` | Local Compose database user. |
 | `POSTGRES_PASSWORD` | Local Compose database password. Change the example value. |
 | `POSTGRES_DB` | Local Compose database name. |
