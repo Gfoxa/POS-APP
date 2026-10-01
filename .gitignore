@@ -47,3 +47,10 @@ next-env.d.ts
 
 # Git worktrees
 /.worktrees/
+
+# Android build outputs and local configuration
+/android/.gradle/
+/android/local.properties
+/android/**/build/
+/android/app/src/main/assets/
+/.capacitor-tooling/
